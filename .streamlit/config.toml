@@ -1,11 +1,10 @@
 [theme]
-primaryColor = "#DC143C"
+primaryColor = "#8B0000"
 backgroundColor = "#FFF8DC"
 secondaryBackgroundColor = "#FFEFD5"
 textColor = "#333333"
 font = "sans serif"
 
 [server]
-headless = true
-address = "0.0.0.0"
-port = 8501
+maxUploadSize = 16
+enableXsrfProtection = true
