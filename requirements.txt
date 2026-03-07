@@ -1,4 +1,5 @@
 streamlit
-supabase-py==2.4.0
+postgrest-py==0.16.1
+httpx
 werkzeug
 pandas
