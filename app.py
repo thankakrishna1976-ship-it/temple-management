@@ -1,11 +1,11 @@
 import streamlit as st
 import bcrypt
 from datetime import datetime, date, timedelta
-import json
 import traceback
+import base64
 
 # ============================================================
-# PAGE CONFIG - MUST BE FIRST STREAMLIT COMMAND
+# PAGE CONFIG
 # ============================================================
 st.set_page_config(
     page_title="Temple Management System",
@@ -27,8 +27,8 @@ TEMPLE_FULL = f"{TEMPLE_NAME}, {TEMPLE_TRUST} - {TEMPLE_REG}, {TEMPLE_PLACE}, {T
 NATCHATHIRAM_LIST = [
     'அசுவினி (Ashwini)', 'பரணி (Bharani)', 'கார்த்திகை (Krittika)',
     'ரோகிணி (Rohini)', 'மிருகசீரிடம் (Mrigashira)', 'திருவாதிரை (Ardra)',
-    'புனர்பூசம் (Punarvasu)', 'பூசம் (Pushya)', 'ஆயில்யம் (Ashlesha)',
-    'மகம் (Magha)', 'பூரம் (Purva Phalguni)', 'உத்திரம் (Uttara Phalguni)',
+    'பு��ர்பூசம் (Punarvasu)', 'பூசம் (Pushya)', 'ஆயில்யம் (Ashlesha)',
+    'மகம் (Magha)', '��ூரம் (Purva Phalguni)', 'உத்திரம் (Uttara Phalguni)',
     'ஹஸ்தம் (Hasta)', 'சித்திரை (Chitra)', 'சுவாதி (Swati)',
     'விசாகம் (Vishakha)', 'அனுஷம் (Anuradha)', 'கேட்டை (Jyeshtha)',
     'மூலம் (Mula)', 'பூராடம் (Purva Ashadha)', 'உத்திராடம் (Uttara Ashadha)',
@@ -49,17 +49,16 @@ RELATION_TYPES = [
 # SUPABASE CONNECTION
 # ============================================================
 def get_db():
-    """Get Supabase client"""
     try:
         from supabase import create_client
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
         return create_client(url, key)
     except KeyError:
-        st.error("⚠️ Supabase credentials not found! Please add SUPABASE_URL and SUPABASE_KEY to Streamlit secrets.")
+        st.error("Supabase credentials not found! Add SUPABASE_URL and SUPABASE_KEY to Streamlit secrets.")
         st.stop()
     except Exception as e:
-        st.error(f"⚠️ Database connection error: {e}")
+        st.error(f"Database connection error: {e}")
         st.stop()
 
 
@@ -78,10 +77,9 @@ def check_password(password, hashed):
 
 
 # ============================================================
-# SAFE DATE PARSER
+# DATE HELPERS
 # ============================================================
 def parse_date(date_str):
-    """Safely parse date string to date object"""
     if not date_str:
         return None
     try:
@@ -93,22 +91,88 @@ def parse_date(date_str):
 
 
 def safe_date_display(date_str):
-    """Safely format date for display"""
     d = parse_date(date_str)
-    if d:
-        return d.strftime('%d/%m/%Y')
-    return '-'
+    return d.strftime('%d/%m/%Y') if d else '-'
+
+
+# ============================================================
+# IMAGE HELPERS - SUPABASE STORAGE
+# ============================================================
+def get_amman_image():
+    """Get Amman image from Supabase storage or session state"""
+    # Check session state first (cached)
+    if 'amman_image_data' in st.session_state and st.session_state['amman_image_data']:
+        return st.session_state['amman_image_data']
+
+    # Try to load from Supabase storage
+    try:
+        db = get_db()
+        # Try to download amman image
+        for ext in ['png', 'jpg', 'jpeg', 'webp']:
+            try:
+                data = db.storage.from_('temple-images').download(f'amman.{ext}')
+                if data:
+                    mime = 'png' if ext == 'png' else 'jpeg' if ext in ['jpg', 'jpeg'] else ext
+                    b64 = base64.b64encode(data).decode()
+                    img_data = f"data:image/{mime};base64,{b64}"
+                    st.session_state['amman_image_data'] = img_data
+                    return img_data
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return None
+
+
+def get_temple_bg():
+    """Get temple background from Supabase storage or session state"""
+    if 'temple_bg_data' in st.session_state and st.session_state['temple_bg_data']:
+        return st.session_state['temple_bg_data']
+
+    try:
+        db = get_db()
+        for ext in ['jpg', 'jpeg', 'png', 'webp']:
+            try:
+                data = db.storage.from_('temple-images').download(f'temple_bg.{ext}')
+                if data:
+                    mime = 'png' if ext == 'png' else 'jpeg' if ext in ['jpg', 'jpeg'] else ext
+                    b64 = base64.b64encode(data).decode()
+                    img_data = f"data:image/{mime};base64,{b64}"
+                    st.session_state['temple_bg_data'] = img_data
+                    return img_data
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return None
+
+
+def upload_image_to_storage(file_data, filename):
+    """Upload image to Supabase storage"""
+    try:
+        db = get_db()
+        # Delete existing file first
+        try:
+            db.storage.from_('temple-images').remove([filename])
+        except Exception:
+            pass
+        # Upload new file
+        db.storage.from_('temple-images').upload(filename, file_data)
+        return True
+    except Exception as e:
+        st.error(f"Upload error: {e}")
+        return False
 
 
 # ============================================================
 # INITIALIZE DEFAULT DATA
 # ============================================================
 def init_default_data():
-    """Create default data if tables are empty"""
     try:
         db = get_db()
 
-        # Check admin
         result = db.table('users').select('id').eq('username', 'admin').execute()
         if not result.data:
             db.table('users').insert({
@@ -119,10 +183,9 @@ def init_default_data():
                 'is_active_user': True
             }).execute()
 
-        # Check pooja types
         result = db.table('pooja_type').select('id').limit(1).execute()
         if not result.data:
-            poojas = [
+            db.table('pooja_type').insert([
                 {'name': 'Abhishekam', 'amount': 100, 'is_active': True},
                 {'name': 'Archanai', 'amount': 50, 'is_active': True},
                 {'name': 'Sahasranamam', 'amount': 200, 'is_active': True},
@@ -131,13 +194,11 @@ def init_default_data():
                 {'name': 'Navagraha Pooja', 'amount': 300, 'is_active': True},
                 {'name': 'Chandana Kavasam', 'amount': 250, 'is_active': True},
                 {'name': 'Annadhanam', 'amount': 1000, 'is_active': True},
-            ]
-            db.table('pooja_type').insert(poojas).execute()
+            ]).execute()
 
-        # Check expense types
         result = db.table('expense_type').select('id').limit(1).execute()
         if not result.data:
-            expenses = [
+            db.table('expense_type').insert([
                 {'name': 'Flowers', 'is_active': True},
                 {'name': 'Oil', 'is_active': True},
                 {'name': 'Camphor', 'is_active': True},
@@ -146,24 +207,21 @@ def init_default_data():
                 {'name': 'Maintenance', 'is_active': True},
                 {'name': 'Salary', 'is_active': True},
                 {'name': 'Others', 'is_active': True},
-            ]
-            db.table('expense_type').insert(expenses).execute()
+            ]).execute()
 
-        # Check daily poojas
         result = db.table('daily_pooja').select('id').limit(1).execute()
         if not result.data:
-            daily = [
+            db.table('daily_pooja').insert([
                 {'pooja_name': 'Suprabhatam', 'pooja_time': '5:30 AM', 'description': 'Morning prayer', 'is_active': True},
                 {'pooja_name': 'Kalai Abhishekam', 'pooja_time': '6:00 AM', 'description': 'Morning bath', 'is_active': True},
                 {'pooja_name': 'Kalai Pooja', 'pooja_time': '7:00 AM', 'description': 'Morning worship', 'is_active': True},
                 {'pooja_name': 'Uchikala Pooja', 'pooja_time': '12:00 PM', 'description': 'Noon', 'is_active': True},
                 {'pooja_name': 'Sayarakshai', 'pooja_time': '6:00 PM', 'description': 'Evening', 'is_active': True},
                 {'pooja_name': 'Artha Jama Pooja', 'pooja_time': '8:00 PM', 'description': 'Night', 'is_active': True},
-            ]
-            db.table('daily_pooja').insert(daily).execute()
+            ]).execute()
 
     except Exception as e:
-        st.warning(f"Init data note: {e}")
+        st.warning(f"Init note: {e}")
 
 
 # ============================================================
@@ -174,10 +232,50 @@ def apply_css():
     <style>
         :root { --td: #8B0000; --tg: #FFD700; --tl: #FFF8DC; }
         .stApp { background: linear-gradient(135deg, #FFF8DC 0%, #FFEFD5 50%, #FFE4B5 100%); }
-        [data-testid="stSidebar"] {
+
+        /* Sidebar - Full width with visible text */
+        section[data-testid="stSidebar"] {
             background: linear-gradient(180deg, #8B0000 0%, #B22222 50%, #DC143C 100%) !important;
+            min-width: 280px !important;
+            width: 280px !important;
         }
-        [data-testid="stSidebar"] * { color: #FFF8DC !important; }
+        section[data-testid="stSidebar"] > div {
+            padding-top: 0 !important;
+        }
+        section[data-testid="stSidebar"] .stButton > button {
+            background: transparent !important;
+            color: #FFF8DC !important;
+            border: none !important;
+            border-left: 3px solid transparent !important;
+            text-align: left !important;
+            padding: 12px 20px !important;
+            font-size: 1em !important;
+            font-weight: 500 !important;
+            border-radius: 0 !important;
+            width: 100% !important;
+            display: flex !important;
+            justify-content: flex-start !important;
+            transition: all 0.3s !important;
+        }
+        section[data-testid="stSidebar"] .stButton > button:hover {
+            background: rgba(255, 215, 0, 0.15) !important;
+            border-left: 3px solid #FFD700 !important;
+            color: #FFD700 !important;
+        }
+        section[data-testid="stSidebar"] hr {
+            border-color: rgba(255, 215, 0, 0.2) !important;
+            margin: 5px 15px !important;
+        }
+        section[data-testid="stSidebar"] .stMarkdown {
+            color: #FFF8DC !important;
+        }
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] div {
+            color: #FFF8DC !important;
+        }
+
         .temple-hdr {
             background: linear-gradient(135deg, #8B0000, #DC143C);
             color: #FFD700; padding: 15px 25px; border-radius: 12px;
@@ -186,6 +284,7 @@ def apply_css():
         }
         .temple-hdr h1 { font-size: 1.5em; margin: 0; color: #FFD700; }
         .temple-hdr p { font-size: 0.85em; margin: 2px 0; color: #FFF8DC; }
+
         .stat-card {
             border-radius: 15px; padding: 20px; color: white;
             box-shadow: 0 5px 20px rgba(0,0,0,0.15); text-align: center; margin-bottom: 10px;
@@ -196,21 +295,24 @@ def apply_css():
         .stat-bills { background: linear-gradient(135deg, #FF8C00, #FFD700); }
         .stat-card h3 { font-size: 1.8em; font-weight: 700; margin: 5px 0; }
         .stat-card p { font-size: 0.85em; opacity: 0.9; margin: 0; }
+
         .ccard {
             background: white; border-radius: 12px;
             box-shadow: 0 2px 15px rgba(0,0,0,0.08); padding: 20px; margin-bottom: 15px;
         }
-        .ccard h3 { color: #8B0000; border-bottom: 2px solid #FFD700; padding-bottom: 8px; }
+
         .pooja-card {
             background: linear-gradient(135deg, #FFF8DC, #FFEFD5);
             border: 1px solid #FFD700; border-radius: 10px; padding: 12px 15px;
             margin-bottom: 8px; border-left: 4px solid #8B0000;
         }
         .pooja-card strong { color: #8B0000; }
+
         .bday-card {
             background: #FFF8DC; border-radius: 8px; padding: 10px 15px;
             margin-bottom: 8px; border-left: 3px solid #DC143C;
         }
+
         .bill-hdr {
             text-align: center; border-bottom: 3px double #8B0000;
             padding-bottom: 15px; margin-bottom: 15px;
@@ -218,6 +320,48 @@ def apply_css():
         .bill-hdr h2 { color: #8B0000; font-size: 1.3em; margin: 0; }
         .bill-hdr h4 { color: #DC143C; font-size: 0.95em; margin: 2px 0; }
         .bill-hdr p { color: #555; font-size: 0.8em; margin: 1px 0; }
+
+        /* Amman round image */
+        .amman-round {
+            width: 100px; height: 100px; border-radius: 50%;
+            border: 4px solid #FFD700; object-fit: cover;
+            box-shadow: 0 0 25px rgba(255,215,0,0.5);
+            display: block; margin: 0 auto 10px;
+        }
+        .amman-round-sm {
+            width: 60px; height: 60px; border-radius: 50%;
+            border: 3px solid #FFD700; object-fit: cover;
+            box-shadow: 0 0 15px rgba(255,215,0,0.4);
+            display: block; margin: 0 auto 8px;
+        }
+        .amman-placeholder {
+            width: 100px; height: 100px; border-radius: 50%;
+            border: 4px solid #FFD700; display: flex;
+            align-items: center; justify-content: center;
+            font-size: 3em; margin: 0 auto 10px;
+            background: linear-gradient(135deg, #FFF8DC, #FFEFD5);
+            box-shadow: 0 0 25px rgba(255,215,0,0.5);
+        }
+        .amman-placeholder-sm {
+            width: 60px; height: 60px; border-radius: 50%;
+            border: 3px solid #FFD700; display: flex;
+            align-items: center; justify-content: center;
+            font-size: 1.8em; margin: 0 auto 8px;
+            background: linear-gradient(135deg, #FFF8DC, #FFEFD5);
+        }
+
+        /* Login page */
+        .login-bg {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-size: cover; background-position: center;
+            z-index: -2; filter: brightness(0.35) saturate(1.2);
+        }
+        .login-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, rgba(139,0,0,0.6), rgba(220,20,60,0.5));
+            z-index: -1;
+        }
+
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
@@ -233,7 +377,8 @@ def init_session():
         'logged_in': False, 'user_id': None, 'username': None,
         'full_name': None, 'role': None, 'page': 'dashboard',
         'edit_devotee_id': None, 'view_devotee_id': None,
-        'print_bill_id': None,
+        'print_bill_id': None, 'amman_image_data': None,
+        'temple_bg_data': None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -241,25 +386,52 @@ def init_session():
 
 
 # ============================================================
-# LOGIN PAGE
+# LOGIN PAGE - WITH AMMAN IMAGE & TEMPLE BG
 # ============================================================
 def login_page():
-    st.markdown(f"""
-    <div style="text-align:center; padding:20px;">
-        <h1 style="color:#8B0000; font-size:2.5em;">🕉️</h1>
-        <h2 style="color:#8B0000;">{TEMPLE_NAME}</h2>
-        <p style="color:#DC143C; font-weight:600;">{TEMPLE_TRUST} - {TEMPLE_REG}</p>
-        <p style="color:#888;">{TEMPLE_PLACE}, {TEMPLE_DISTRICT}</p>
-        <hr style="border-color:#FFD700; width:50%; margin:15px auto;">
-    </div>
-    """, unsafe_allow_html=True)
+    # Get images
+    amman_img = get_amman_image()
+    temple_bg = get_temple_bg()
 
-    c1, c2, c3 = st.columns([1, 1.5, 1])
+    # Temple background
+    if temple_bg:
+        st.markdown(f"""
+        <div class="login-bg" style="background-image:url('{temple_bg}');"></div>
+        <div class="login-overlay"></div>
+        """, unsafe_allow_html=True)
+
+    # Main login content
+    st.markdown("<div style='height:30px;'></div>", unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.markdown("### 🔐 Please Login")
+        st.markdown("""
+        <div style="background:rgba(255,255,255,0.96); border-radius:20px; padding:35px;
+                    box-shadow:0 20px 60px rgba(0,0,0,0.3); text-align:center;
+                    backdrop-filter:blur(10px);">
+        """, unsafe_allow_html=True)
+
+        # Amman Image - Round
+        if amman_img:
+            st.markdown(f'<img src="{amman_img}" class="amman-round">', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="amman-placeholder">🙏</div>', unsafe_allow_html=True)
+
+        st.markdown(f"""
+            <h2 style="color:#8B0000; margin:5px 0; font-weight:700;">{TEMPLE_NAME}</h2>
+            <p style="color:#DC143C; font-weight:600; font-size:0.9em;">{TEMPLE_TRUST} - {TEMPLE_REG}</p>
+            <p style="color:#888; font-size:0.82em;">{TEMPLE_PLACE}, {TEMPLE_DISTRICT}</p>
+            <hr style="border-color:#FFD700; margin:12px auto; width:60%;">
+        """, unsafe_allow_html=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # Login form
+        st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+
         with st.form("login_form"):
-            username = st.text_input("👤 Username")
-            password = st.text_input("🔒 Password", type="password")
+            username = st.text_input("👤 Username", placeholder="Enter username")
+            password = st.text_input("🔒 Password", type="password", placeholder="Enter password")
             submitted = st.form_submit_button("🕉️ Login", use_container_width=True)
 
             if submitted and username and password:
@@ -285,55 +457,255 @@ def login_page():
             elif submitted:
                 st.warning("Please enter username and password")
 
-        st.markdown('<p style="text-align:center;color:#aaa;font-size:0.8em;">🕉️ Temple Management System</p>', unsafe_allow_html=True)
+        st.markdown('<p style="text-align:center;color:#aaa;font-size:0.8em;">🕉️ Temple Management System v2.0</p>', unsafe_allow_html=True)
 
 
 # ============================================================
-# SIDEBAR
+# SIDEBAR - FULL MENU NAMES (NOT ICONS ONLY)
 # ============================================================
 def sidebar():
     with st.sidebar:
+        # Amman image in sidebar
+        amman_img = get_amman_image()
+
+        st.markdown("<div style='text-align:center; padding:15px 0; border-bottom:2px solid rgba(255,215,0,0.3);'>", unsafe_allow_html=True)
+
+        if amman_img:
+            st.markdown(f'<img src="{amman_img}" class="amman-round-sm">', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="amman-placeholder-sm">🙏</div>', unsafe_allow_html=True)
+
         st.markdown(f"""
-        <div style="text-align:center; padding:10px 0; border-bottom:2px solid rgba(255,215,0,0.3);">
-            <h2 style="margin:0;">🕉️</h2>
-            <h4 style="color:#FFD700; font-size:0.85em; margin:5px 0;">{TEMPLE_NAME}</h4>
-            <p style="color:rgba(255,215,0,0.7); font-size:0.7em;">{TEMPLE_TRUST}</p>
-            <p style="color:#FFD700; font-size:0.75em; margin-top:5px;">
+            <h4 style="color:#FFD700; font-size:0.85em; margin:5px 0; text-align:center;">{TEMPLE_NAME}</h4>
+            <p style="color:rgba(255,215,0,0.7); font-size:0.7em; text-align:center;">{TEMPLE_TRUST}</p>
+            <p style="color:rgba(255,215,0,0.7); font-size:0.65em; text-align:center;">{TEMPLE_PLACE}, {TEMPLE_DISTRICT}</p>
+            <p style="color:#FFD700; font-size:0.78em; margin-top:6px; text-align:center;">
                 👤 {st.session_state['full_name']}
-                {'🔑 ADMIN' if st.session_state['role'] == 'admin' else ''}
+                {'  🔑 ADMIN' if st.session_state['role'] == 'admin' else ''}
             </p>
         </div>
         """, unsafe_allow_html=True)
 
         st.markdown("---")
 
-        menus = {
-            "🏠 Dashboard": "dashboard",
-            "👥 Devotees": "devotees",
-            "🧾 Billing": "billing",
-            "💰 Expenses": "expenses",
-            "📊 Reports": "reports",
-            "🎓 Samaya Vakuppu": "samaya",
-            "🏛️ Mandapam": "mandapam",
-            "🙏 Daily Pooja": "daily_pooja",
-            "⚙️ Settings": "settings",
-        }
-        if st.session_state['role'] == 'admin':
-            menus["👤 Users"] = "users"
-            menus["🗑️ Deleted Bills"] = "deleted_bills"
+        # ===== MENU WITH FULL NAMES =====
+        # Main Navigation
+        st.markdown("<p style='color:#FFD700; font-size:0.75em; font-weight:700; padding:0 20px; margin-bottom:5px;'>MAIN MENU</p>", unsafe_allow_html=True)
 
-        for label, page in menus.items():
-            if st.button(label, key=f"nav_{page}", use_container_width=True):
-                st.session_state['page'] = page
+        if st.button("🏠  Dashboard", key="nav_dashboard", use_container_width=True):
+            st.session_state['page'] = 'dashboard'
+            st.rerun()
+
+        if st.button("👥  Devotees", key="nav_devotees", use_container_width=True):
+            st.session_state['page'] = 'devotees'
+            st.rerun()
+
+        if st.button("🧾  Billing", key="nav_billing", use_container_width=True):
+            st.session_state['page'] = 'billing'
+            st.rerun()
+
+        if st.button("💰  Expenses", key="nav_expenses", use_container_width=True):
+            st.session_state['page'] = 'expenses'
+            st.rerun()
+
+        if st.button("📊  Reports", key="nav_reports", use_container_width=True):
+            st.session_state['page'] = 'reports'
+            st.rerun()
+
+        st.markdown("---")
+
+        # Special Sections
+        st.markdown("<p style='color:#FFD700; font-size:0.75em; font-weight:700; padding:0 20px; margin-bottom:5px;'>SPECIAL</p>", unsafe_allow_html=True)
+
+        if st.button("🎓  Samaya Vakuppu", key="nav_samaya", use_container_width=True):
+            st.session_state['page'] = 'samaya'
+            st.rerun()
+
+        if st.button("🏛️  Thirumana Mandapam", key="nav_mandapam", use_container_width=True):
+            st.session_state['page'] = 'mandapam'
+            st.rerun()
+
+        if st.button("🙏  Daily Pooja Schedule", key="nav_daily_pooja", use_container_width=True):
+            st.session_state['page'] = 'daily_pooja'
+            st.rerun()
+
+        st.markdown("---")
+
+        # Settings
+        st.markdown("<p style='color:#FFD700; font-size:0.75em; font-weight:700; padding:0 20px; margin-bottom:5px;'>SETTINGS</p>", unsafe_allow_html=True)
+
+        if st.button("⚙️  Pooja & Expense Types", key="nav_settings", use_container_width=True):
+            st.session_state['page'] = 'settings'
+            st.rerun()
+
+        if st.button("🖼️  Temple Images", key="nav_images", use_container_width=True):
+            st.session_state['page'] = 'temple_images'
+            st.rerun()
+
+        # Admin only menus
+        if st.session_state['role'] == 'admin':
+            st.markdown("---")
+            st.markdown("<p style='color:#FFD700; font-size:0.75em; font-weight:700; padding:0 20px; margin-bottom:5px;'>ADMIN</p>", unsafe_allow_html=True)
+
+            if st.button("👤  User Management", key="nav_users", use_container_width=True):
+                st.session_state['page'] = 'users'
+                st.rerun()
+
+            if st.button("🗑️  Deleted Bills", key="nav_deleted_bills", use_container_width=True):
+                st.session_state['page'] = 'deleted_bills'
                 st.rerun()
 
         st.markdown("---")
-        if st.button("🚪 Logout", use_container_width=True):
+
+        if st.button("🚪  Logout", key="nav_logout", use_container_width=True):
             for k in list(st.session_state.keys()):
                 del st.session_state[k]
             st.rerun()
 
-        st.markdown(f'<p style="text-align:center;font-size:0.7em;color:rgba(255,215,0,0.5);">📅 {datetime.now().strftime("%d %B %Y")}</p>', unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="text-align:center; padding-top:10px; font-size:0.7em; color:rgba(255,215,0,0.5);">
+            📅 {datetime.now().strftime('%d %B %Y, %A')}
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ============================================================
+# TEMPLE IMAGES UPLOAD PAGE
+# ============================================================
+def pg_temple_images():
+    st.markdown("### 🖼️ Temple Images")
+    st.markdown("Upload Amman image (shown as round icon) and Temple background (shown on login page)")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("""
+        <div style="background:white; border-radius:12px; padding:20px; box-shadow:0 2px 10px rgba(0,0,0,0.1);">
+            <h4 style="color:#8B0000; border-bottom:2px solid #FFD700; padding-bottom:8px;">
+                🙏 Amman Image (Round Icon)
+            </h4>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Show current image
+        amman_img = get_amman_image()
+        if amman_img:
+            st.markdown(f'<div style="text-align:center;"><img src="{amman_img}" class="amman-round"></div>', unsafe_allow_html=True)
+            st.success("✅ Amman image is set")
+        else:
+            st.markdown('<div style="text-align:center;"><div class="amman-placeholder">🙏</div></div>', unsafe_allow_html=True)
+            st.info("No Amman image uploaded yet. Using default icon.")
+
+        st.markdown("---")
+        st.markdown("**Upload New Amman Image:**")
+        st.markdown("*Best: Square image (e.g., 500x500px), PNG or JPG*")
+
+        amman_file = st.file_uploader("Choose Amman image", type=['png', 'jpg', 'jpeg', 'webp'],
+                                        key="amman_upload")
+
+        if amman_file:
+            # Preview
+            st.image(amman_file, caption="Preview", width=150)
+
+            if st.button("📤 Upload Amman Image", key="btn_upload_amman"):
+                ext = amman_file.name.rsplit('.', 1)[-1].lower()
+                filename = f"amman.{ext}"
+                file_data = amman_file.read()
+
+                # Remove old files
+                db = get_db()
+                for old_ext in ['png', 'jpg', 'jpeg', 'webp']:
+                    try:
+                        db.storage.from_('temple-images').remove([f'amman.{old_ext}'])
+                    except Exception:
+                        pass
+
+                if upload_image_to_storage(file_data, filename):
+                    # Clear cache
+                    st.session_state['amman_image_data'] = None
+                    st.success("✅ Amman image uploaded successfully!")
+                    st.rerun()
+
+    with col2:
+        st.markdown("""
+        <div style="background:white; border-radius:12px; padding:20px; box-shadow:0 2px 10px rgba(0,0,0,0.1);">
+            <h4 style="color:#8B0000; border-bottom:2px solid #FFD700; padding-bottom:8px;">
+                🏛️ Temple Background (Login Page)
+            </h4>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Show current background
+        temple_bg = get_temple_bg()
+        if temple_bg:
+            st.markdown(f"""
+            <div style="text-align:center;">
+                <img src="{temple_bg}" style="width:250px; height:150px; border-radius:10px;
+                     object-fit:cover; border:2px solid #FFD700; box-shadow:0 2px 10px rgba(0,0,0,0.2);">
+            </div>
+            """, unsafe_allow_html=True)
+            st.success("✅ Temple background is set")
+        else:
+            st.markdown("""
+            <div style="text-align:center;">
+                <div style="width:250px; height:150px; background:#ddd; border-radius:10px;
+                     display:flex; align-items:center; justify-content:center; margin:0 auto;
+                     border:2px dashed #ccc;">
+                    <span style="color:#999; font-size:2em;">🏛️</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.info("No temple background uploaded yet.")
+
+        st.markdown("---")
+        st.markdown("**Upload New Temple Background:**")
+        st.markdown("*Best: Wide image (e.g., 1920x1080px), JPG*")
+
+        bg_file = st.file_uploader("Choose temple background", type=['png', 'jpg', 'jpeg', 'webp'],
+                                     key="bg_upload")
+
+        if bg_file:
+            # Preview
+            st.image(bg_file, caption="Preview", width=250)
+
+            if st.button("📤 Upload Temple Background", key="btn_upload_bg"):
+                ext = bg_file.name.rsplit('.', 1)[-1].lower()
+                filename = f"temple_bg.{ext}"
+                file_data = bg_file.read()
+
+                # Remove old files
+                db = get_db()
+                for old_ext in ['png', 'jpg', 'jpeg', 'webp']:
+                    try:
+                        db.storage.from_('temple-images').remove([f'temple_bg.{old_ext}'])
+                    except Exception:
+                        pass
+
+                if upload_image_to_storage(file_data, filename):
+                    st.session_state['temple_bg_data'] = None
+                    st.success("✅ Temple background uploaded successfully!")
+                    st.rerun()
+
+    # Instructions
+    st.markdown("---")
+    st.markdown("""
+    <div style="background:white; border-radius:12px; padding:20px; box-shadow:0 2px 10px rgba(0,0,0,0.1);">
+        <h4 style="color:#8B0000;">📌 Instructions</h4>
+        <ul style="color:#555;">
+            <li><strong>Amman Image:</strong> This will appear as a round icon in the sidebar, login page, and bill headers.</li>
+            <li><strong>Temple Background:</strong> This will appear as the background image on the login page.</li>
+            <li><strong>Image Size:</strong> Keep images under 5MB for best performance.</li>
+            <li><strong>Format:</strong> PNG or JPG recommended.</li>
+            <li>After uploading, you may need to <strong>reload the page</strong> to see changes everywhere.</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Clear cache button
+    if st.button("🔄 Refresh Images (Clear Cache)"):
+        st.session_state['amman_image_data'] = None
+        st.session_state['temple_bg_data'] = None
+        st.rerun()
 
 
 # ============================================================
@@ -341,16 +713,28 @@ def sidebar():
 # ============================================================
 def pg_dashboard():
     db = get_db()
+    amman_img = get_amman_image()
 
-    st.markdown(f"""
-    <div class="temple-hdr">
-        <h1>🕉️ {TEMPLE_NAME}</h1>
-        <p>{TEMPLE_TRUST} - {TEMPLE_REG}</p>
-        <p>{TEMPLE_PLACE}, {TEMPLE_DISTRICT}</p>
-    </div>
-    """, unsafe_allow_html=True)
+    # Header with amman image
+    if amman_img:
+        st.markdown(f"""
+        <div class="temple-hdr">
+            <img src="{amman_img}" style="width:70px;height:70px;border-radius:50%;border:3px solid #FFD700;object-fit:cover;display:block;margin:0 auto 8px;">
+            <h1>{TEMPLE_NAME}</h1>
+            <p>{TEMPLE_TRUST} - {TEMPLE_REG}</p>
+            <p>{TEMPLE_PLACE}, {TEMPLE_DISTRICT}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div class="temple-hdr">
+            <h1>🕉️ {TEMPLE_NAME}</h1>
+            <p>{TEMPLE_TRUST} - {TEMPLE_REG}</p>
+            <p>{TEMPLE_PLACE}, {TEMPLE_DISTRICT}</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-    period = st.radio("���� Period", ["Daily", "Weekly", "Monthly", "Yearly"], horizontal=True)
+    period = st.radio("📅 Period", ["Daily", "Weekly", "Monthly", "Yearly"], horizontal=True)
 
     today_d = date.today()
     if period == "Daily":
@@ -366,23 +750,19 @@ def pg_dashboard():
         ed = today_d
 
     try:
-        # Income
         bills_r = db.table('bill').select('amount').eq('is_deleted', False).gte('bill_date', sd.isoformat()).lte('bill_date', ed.isoformat() + 'T23:59:59').execute()
         total_income = sum(b['amount'] or 0 for b in (bills_r.data or []))
         total_bills = len(bills_r.data or [])
 
-        # Expenses
         exp_r = db.table('expense').select('amount').gte('expense_date', sd.isoformat()).lte('expense_date', ed.isoformat()).execute()
         total_expenses = sum(e['amount'] or 0 for e in (exp_r.data or []))
 
-        # Devotees count
         dev_r = db.table('devotee').select('id', count='exact').eq('is_family_head', True).eq('is_active', True).execute()
         total_devotees = dev_r.count or 0
     except Exception as e:
         total_income = total_expenses = total_bills = total_devotees = 0
         st.warning(f"Stats error: {e}")
 
-    # Cards
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(f'<div class="stat-card stat-income"><p>📈 {period} Income</p><h3>₹{total_income:,.2f}</h3></div>', unsafe_allow_html=True)
@@ -393,7 +773,6 @@ def pg_dashboard():
     with c4:
         st.markdown(f'<div class="stat-card stat-bills"><p>🧾 {period} Bills</p><h3>{total_bills}</h3></div>', unsafe_allow_html=True)
 
-    # Pooja + Birthdays
     cl, cr = st.columns(2)
 
     with cl:
@@ -402,13 +781,14 @@ def pg_dashboard():
             dp_r = db.table('daily_pooja').select('*').eq('is_active', True).order('pooja_time').execute()
             for p in (dp_r.data or []):
                 st.markdown(f"""<div class="pooja-card">
-                    <strong>{p['pooja_name']}</strong> - <span style="color:#8B0000;font-weight:700;">{p.get('pooja_time','TBD')}</span>
+                    <strong>{p['pooja_name']}</strong> -
+                    <span style="color:#8B0000;font-weight:700;">{p.get('pooja_time','TBD')}</span>
                     <br><small style="color:#666;">{p.get('description','')}</small>
                 </div>""", unsafe_allow_html=True)
             if not dp_r.data:
                 st.info("No pooja scheduled")
         except Exception as e:
-            st.warning(f"Pooja error: {e}")
+            st.warning(f"Error: {e}")
 
     with cr:
         st.markdown("### 🎂 Today's Birthdays")
@@ -424,9 +804,8 @@ def pg_dashboard():
             if not birthdays:
                 st.info("No birthdays today")
         except Exception as e:
-            st.warning(f"Birthday error: {e}")
+            st.warning(f"Error: {e}")
 
-    # Recent bills
     st.markdown("### 🧾 Recent Bills")
     try:
         import pandas as pd
@@ -436,17 +815,13 @@ def pg_dashboard():
             for b in rb.data:
                 name = (b.get('devotee') or {}).get('name', '') or b.get('guest_name', '-')
                 pooja = (b.get('pooja_type') or {}).get('name', '-')
-                rows.append({
-                    'Bill': b.get('bill_number', '-'),
-                    'Date': str(b.get('bill_date', '-'))[:10],
-                    'Name': name, 'Pooja': pooja,
-                    'Amount': f"₹{b.get('amount',0):,.2f}"
-                })
+                rows.append({'Bill': b.get('bill_number', '-'), 'Date': str(b.get('bill_date', '-'))[:10],
+                             'Name': name, 'Pooja': pooja, 'Amount': f"₹{b.get('amount',0):,.2f}"})
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         else:
             st.info("No bills yet")
     except Exception as e:
-        st.warning(f"Recent bills error: {e}")
+        st.warning(f"Error: {e}")
 
 
 # ============================================================
@@ -491,25 +866,23 @@ def pg_devotees():
                             st.session_state['page'] = 'add_devotee'
                             st.session_state['edit_devotee_id'] = d['id']
                             st.rerun()
-                        if st.button("🗑️ Del", key=f"d_{d['id']}"):
+                        if st.button("🗑️ Delete", key=f"d_{d['id']}"):
                             db.table('devotee_yearly_pooja').delete().eq('devotee_id', d['id']).execute()
                             db.table('devotee').delete().eq('family_head_id', d['id']).execute()
                             db.table('devotee').delete().eq('id', d['id']).execute()
                             st.success("Deleted!")
                             st.rerun()
 
-                    # Family
                     fm_result = db.table('devotee').select('*').eq('family_head_id', d['id']).execute()
                     if fm_result.data:
-                        st.markdown("**👨‍👩‍👧‍👦 Family:**")
                         import pandas as pd
+                        st.markdown("**👨‍👩‍👧‍👦 Family:**")
                         fm_rows = [{'Name': f['name'], 'Relation': f.get('relation_type', '-'),
-                                     'DOB': safe_date_display(f.get('dob')),
-                                     'Star': f.get('natchathiram', '-'),
+                                     'DOB': safe_date_display(f.get('dob')), 'Star': f.get('natchathiram', '-'),
                                      'Mobile': f.get('mobile_no', '-')} for f in fm_result.data]
                         st.dataframe(pd.DataFrame(fm_rows), use_container_width=True, hide_index=True)
         else:
-            st.info("No devotees found. Click 'Add Devotee' to start.")
+            st.info("No devotees found.")
     except Exception as e:
         st.error(f"Error: {e}")
 
@@ -530,7 +903,7 @@ def pg_add_devotee():
     else:
         st.markdown("### ➕ Add New Devotee")
 
-    if st.button("⬅️ Back"):
+    if st.button("⬅️ Back to Devotees"):
         st.session_state['page'] = 'devotees'
         st.rerun()
 
@@ -543,7 +916,6 @@ def pg_add_devotee():
             mobile = st.text_input("Mobile", value=dd.get('mobile_no', '') if dd else '')
             rel_idx = (RELATION_TYPES.index(dd['relation_type']) + 1) if dd and dd.get('relation_type') in RELATION_TYPES else 0
             relation = st.selectbox("Relation", [''] + RELATION_TYPES, index=rel_idx)
-
         with c2:
             whatsapp = st.text_input("WhatsApp", value=dd.get('whatsapp_no', '') if dd else '')
             wed_val = parse_date(dd.get('wedding_day')) if dd else None
@@ -552,7 +924,6 @@ def pg_add_devotee():
             natchathiram = st.selectbox("Natchathiram", [''] + NATCHATHIRAM_LIST, index=star_idx)
             address = st.text_area("Address", value=dd.get('address', '') if dd else '')
 
-        # Family members
         st.markdown("---")
         st.markdown("#### 👨‍👩‍👧‍👦 Family Members")
 
@@ -584,7 +955,6 @@ def pg_add_devotee():
                 family_data.append({'name': fn, 'dob': fd.isoformat() if fd else None,
                     'relation_type': fr or None, 'natchathiram': fs or None, 'mobile_no': fmob or None})
 
-        # Yearly poojas
         st.markdown("---")
         st.markdown("#### 🙏 Yearly Poojas")
 
@@ -616,24 +986,19 @@ def pg_add_devotee():
                 yp_data.append({'pooja_type_id': pt_map.get(ypt), 'pooja_name': ypt,
                     'pooja_date': ypd.isoformat() if ypd else None, 'notes': ypn or None})
 
-        submitted = st.form_submit_button("💾 Save", use_container_width=True)
+        submitted = st.form_submit_button("💾 Save Devotee", use_container_width=True)
 
         if submitted:
             if not name.strip():
                 st.error("Name is required!")
             else:
                 rec = {
-                    'name': name.strip(),
-                    'dob': dob.isoformat() if dob else None,
-                    'relation_type': relation or None,
-                    'mobile_no': mobile or None,
-                    'whatsapp_no': whatsapp or None,
-                    'wedding_day': wedding.isoformat() if wedding else None,
-                    'natchathiram': natchathiram or None,
-                    'address': address or None,
+                    'name': name.strip(), 'dob': dob.isoformat() if dob else None,
+                    'relation_type': relation or None, 'mobile_no': mobile or None,
+                    'whatsapp_no': whatsapp or None, 'wedding_day': wedding.isoformat() if wedding else None,
+                    'natchathiram': natchathiram or None, 'address': address or None,
                     'is_family_head': True, 'is_active': True
                 }
-
                 try:
                     if edit_id:
                         db.table('devotee').update(rec).eq('id', edit_id).execute()
@@ -644,16 +1009,13 @@ def pg_add_devotee():
                         r = db.table('devotee').insert(rec).execute()
                         dev_id = r.data[0]['id']
 
-                    # Family
                     for fm in family_data:
                         fm_rec = {**fm, 'is_family_head': False, 'family_head_id': dev_id,
                                    'address': address or None, 'is_active': True}
                         db.table('devotee').insert(fm_rec).execute()
 
-                    # Yearly poojas
                     for yp in yp_data:
-                        yp_rec = {**yp, 'devotee_id': dev_id}
-                        db.table('devotee_yearly_pooja').insert(yp_rec).execute()
+                        db.table('devotee_yearly_pooja').insert({**yp, 'devotee_id': dev_id}).execute()
 
                     st.success(f"✅ Devotee {'updated' if edit_id else 'added'}!")
                     st.session_state['page'] = 'devotees'
@@ -696,7 +1058,7 @@ def pg_billing():
                 if not deleted:
                     total_active += amt
 
-                with st.expander(f"{status} {b.get('bill_number','-')} | {name} | {pooja} | ��{amt:,.2f}"):
+                with st.expander(f"{status} {b.get('bill_number','-')} | {name} | {pooja} | ₹{amt:,.2f}"):
                     st.write(f"**Bill:** {b.get('bill_number','-')} | **Manual:** {b.get('manual_bill_no','-')}")
                     st.write(f"**Date:** {str(b.get('bill_date','-'))[:16]} | **Name:** {name}")
                     st.write(f"**Pooja:** {pooja} | **Amount:** ₹{amt:,.2f}")
@@ -715,10 +1077,8 @@ def pg_billing():
                                 if st.button("🗑️ Delete", key=f"db_{b['id']}"):
                                     if reason.strip():
                                         db.table('bill').update({
-                                            'is_deleted': True,
-                                            'deleted_by': st.session_state['user_id'],
-                                            'deleted_at': datetime.now().isoformat(),
-                                            'delete_reason': reason
+                                            'is_deleted': True, 'deleted_by': st.session_state['user_id'],
+                                            'deleted_at': datetime.now().isoformat(), 'delete_reason': reason
                                         }).eq('id', b['id']).execute()
                                         st.success("Deleted!")
                                         st.rerun()
@@ -760,7 +1120,6 @@ def pg_new_bill():
             book_no = st.text_input("Bill Book No")
 
         bill_date = st.date_input("Date", value=date.today())
-
         dev_type = st.radio("Type", ["Enrolled", "Guest"], horizontal=True)
 
         devotee_id = None
@@ -814,8 +1173,7 @@ def pg_new_bill():
             else:
                 try:
                     rec = {
-                        'bill_number': next_no,
-                        'manual_bill_no': manual_no or None,
+                        'bill_number': next_no, 'manual_bill_no': manual_no or None,
                         'bill_book_no': book_no or None,
                         'bill_date': bill_date.isoformat() + 'T' + datetime.now().strftime('%H:%M:%S'),
                         'devotee_type': 'enrolled' if dev_type == "Enrolled" else 'guest',
@@ -824,10 +1182,8 @@ def pg_new_bill():
                         'guest_address': guest_addr if dev_type == "Guest" else None,
                         'guest_mobile': guest_mob if dev_type == "Guest" else None,
                         'guest_whatsapp': guest_wa if dev_type == "Guest" else None,
-                        'pooja_type_id': pt_opts[sel_pooja]['id'],
-                        'amount': amount,
-                        'notes': notes or None,
-                        'created_by': st.session_state['user_id'],
+                        'pooja_type_id': pt_opts[sel_pooja]['id'], 'amount': amount,
+                        'notes': notes or None, 'created_by': st.session_state['user_id'],
                         'is_deleted': False
                     }
                     r = db.table('bill').insert(rec).execute()
@@ -851,7 +1207,7 @@ def pg_view_bill():
         st.rerun()
         return
 
-    if st.button("⬅️ Back"):
+    if st.button("⬅️ Back to Bills"):
         st.session_state['page'] = 'billing'
         st.rerun()
 
@@ -868,14 +1224,25 @@ def pg_view_bill():
         pooja = (b.get('pooja_type') or {}).get('name', '-')
         amt = b.get('amount', 0)
 
+        # Get amman image for bill
+        amman_img = get_amman_image()
+        amman_html = f'<img src="{amman_img}" style="width:55px;height:55px;border-radius:50%;border:2px solid #FFD700;object-fit:cover;">' if amman_img else '🕉️'
+
         st.markdown(f"""
         <div style="background:white; padding:30px; border-radius:12px; box-shadow:0 2px 15px rgba(0,0,0,0.1); max-width:700px; margin:auto;">
             <div class="bill-hdr">
-                <h2>🕉️ {TEMPLE_NAME}</h2>
-                <h4>{TEMPLE_TRUST} - {TEMPLE_REG}</h4>
+                <div style="display:flex;align-items:center;justify-content:center;gap:15px;margin-bottom:10px;">
+                    {amman_html}
+                    <div>
+                        <h2 style="color:#8B0000;margin:0;">{TEMPLE_NAME}</h2>
+                        <h4 style="color:#DC143C;margin:2px 0;">{TEMPLE_TRUST} - {TEMPLE_REG}</h4>
+                    </div>
+                    {amman_html}
+                </div>
                 <p>{TEMPLE_PLACE}, {TEMPLE_DISTRICT}</p>
                 <p><strong>BILL RECEIPT</strong></p>
             </div>
+
             <table style="width:100%;font-size:0.9em;">
                 <tr><td><strong>Bill:</strong> {b.get('bill_number','-')}</td><td><strong>Manual:</strong> {b.get('manual_bill_no','-')}</td></tr>
                 <tr><td><strong>Date:</strong> {str(b.get('bill_date','-'))[:16]}</td><td><strong>Book:</strong> {b.get('bill_book_no','-')}</td></tr>
@@ -925,7 +1292,7 @@ def pg_expenses():
     with fc2:
         to_d = st.date_input("To", value=date.today(), key="et")
 
-    with st.expander("➕ Add Expense"):
+    with st.expander("��� Add Expense"):
         try:
             ets = db.table('expense_type').select('*').eq('is_active', True).execute()
             et_list = ets.data or []
@@ -947,10 +1314,8 @@ def pg_expenses():
                 if etype and eamt > 0:
                     try:
                         db.table('expense').insert({
-                            'expense_type_id': et_opts[etype],
-                            'amount': eamt,
-                            'description': edesc or None,
-                            'expense_date': edate.isoformat(),
+                            'expense_type_id': et_opts[etype], 'amount': eamt,
+                            'description': edesc or None, 'expense_date': edate.isoformat(),
                             'created_by': st.session_state['user_id']
                         }).execute()
                         st.success("✅ Added!")
@@ -959,20 +1324,17 @@ def pg_expenses():
                         st.error(f"Error: {e}")
 
     try:
+        import pandas as pd
         exps = db.table('expense').select('*, expense_type(name)').gte('expense_date', from_d.isoformat()).lte('expense_date', to_d.isoformat()).order('expense_date', desc=True).execute()
         if exps.data:
-            import pandas as pd
             total = 0
             rows = []
             for e in exps.data:
                 total += e.get('amount', 0) or 0
-                rows.append({
-                    'ID': e['id'],
-                    'Date': e.get('expense_date', '-'),
-                    'Type': (e.get('expense_type') or {}).get('name', '-'),
-                    'Description': e.get('description', '-'),
-                    'Amount': f"₹{e.get('amount',0):,.2f}"
-                })
+                rows.append({'ID': e['id'], 'Date': e.get('expense_date', '-'),
+                             'Type': (e.get('expense_type') or {}).get('name', '-'),
+                             'Description': e.get('description', '-'),
+                             'Amount': f"₹{e.get('amount',0):,.2f}"})
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             st.markdown(f"**Total: ₹{total:,.2f}**")
 
@@ -1016,7 +1378,6 @@ def pg_reports():
             net = income - expense
             st.markdown(f'<div class="stat-card" style="background:linear-gradient(135deg,#4B0082,#8A2BE2);"><p>💰 Net</p><h3>₹{net:,.2f}</h3></div>', unsafe_allow_html=True)
 
-        # Breakdown
         from collections import defaultdict
         import pandas as pd
 
@@ -1040,7 +1401,6 @@ def pg_reports():
                 pe[n]['total'] += e['amount'] or 0
             if pe:
                 st.dataframe(pd.DataFrame([{'Type': k, 'Count': v['count'], 'Amount': f"₹{v['total']:,.2f}"} for k, v in pe.items()]), use_container_width=True, hide_index=True)
-
     except Exception as e:
         st.error(f"Error: {e}")
 
@@ -1205,16 +1565,16 @@ def pg_daily_pooja():
 # ============================================================
 def pg_settings():
     db = get_db()
-    st.markdown("### ⚙️ Settings")
+    st.markdown("### ⚙️ Settings - Pooja & Expense Types")
 
     cl, cr = st.columns(2)
 
     with cl:
         st.markdown("#### 🙏 Pooja Types")
         with st.form("pt_form"):
-            ptn = st.text_input("Name *", key="ptn")
-            pta = st.number_input("Amount", min_value=0.0, step=1.0, key="pta")
-            if st.form_submit_button("➕ Add"):
+            ptn = st.text_input("Pooja Name *", key="ptn")
+            pta = st.number_input("Amount (₹)", min_value=0.0, step=1.0, key="pta")
+            if st.form_submit_button("➕ Add Pooja Type"):
                 if ptn.strip():
                     try:
                         db.table('pooja_type').insert({'name': ptn, 'amount': pta, 'is_active': True}).execute()
@@ -1241,8 +1601,8 @@ def pg_settings():
     with cr:
         st.markdown("#### 💰 Expense Types")
         with st.form("et_form"):
-            etn = st.text_input("Name *", key="etn")
-            if st.form_submit_button("➕ Add"):
+            etn = st.text_input("Expense Type Name *", key="etn")
+            if st.form_submit_button("➕ Add Expense Type"):
                 if etn.strip():
                     try:
                         db.table('expense_type').insert({'name': etn, 'is_active': True}).execute()
@@ -1276,13 +1636,13 @@ def pg_users():
 
     st.markdown("### 👤 User Management")
 
-    with st.expander("➕ Add User"):
+    with st.expander("➕ Add New User"):
         with st.form("usr_form"):
             un = st.text_input("Username *")
             ufn = st.text_input("Full Name")
             upw = st.text_input("Password *", type="password")
             ur = st.selectbox("Role", ["user", "admin"])
-            if st.form_submit_button("💾 Create"):
+            if st.form_submit_button("💾 Create User"):
                 if un.strip() and upw:
                     try:
                         existing = db.table('users').select('id').eq('username', un).execute()
@@ -1306,8 +1666,8 @@ def pg_users():
                 st.write(f"**{u['username']}** ({u.get('full_name', '-')})")
             with c2:
                 role = "🔑 Admin" if u['role'] == 'admin' else "👤 User"
-                status = "✅" if u['is_active_user'] else "❌"
-                st.write(f"{role} {status}")
+                status = "✅ Active" if u['is_active_user'] else "❌ Inactive"
+                st.write(f"{role} | {status}")
             with c3:
                 if u['id'] != st.session_state['user_id']:
                     if st.button("Toggle", key=f"ut_{u['id']}"):
@@ -1382,6 +1742,7 @@ def main():
         'mandapam': pg_mandapam,
         'daily_pooja': pg_daily_pooja,
         'settings': pg_settings,
+        'temple_images': pg_temple_images,
         'users': pg_users,
         'deleted_bills': pg_deleted_bills,
     }
